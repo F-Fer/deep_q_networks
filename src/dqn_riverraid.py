@@ -19,7 +19,7 @@ from torch.utils.tensorboard.writer import SummaryWriter
 DEFAULT_ENV_NAME = "RiverraidNoFrameskip-v4"
 DEFAULT_MODEL_DIR = "models"
 MEAN_REWARD_BOUND = 10_000
-MAX_FRAMES = 2_500_000
+MAX_FRAMES = 1_000_000
 
 GAMMA = 0.99
 BATCH_SIZE = 32
@@ -151,8 +151,7 @@ if __name__ == "__main__":
     # Initialize parameter grid
     param_grid = {
         "eps_final": [0.05, 0.01, 0.005],
-        "eps_decay_last_frame": [500_000, 1_000_000, 2_000_000],
-        "learning_rate": [1e-4, 1e-3, 1e-5],
+        "eps_decay_last_frame": [500_000, 1_000_000]
     }
     param_combinations = [
         dict(zip(param_grid.keys(), values))
@@ -163,11 +162,6 @@ if __name__ == "__main__":
     for params in param_combinations:
         epsilon_final = params["eps_final"]
         eps_decay_last_frame = params["eps_decay_last_frame"]
-        learning_rate = params["learning_rate"]
-
-        epsilon_final = EPSILON_FINAL
-        eps_decay_last_frame = EPSILON_DECAY_LAST_FRAME
-        learning_rate = 1e-5
 
         # Define unique identifier for this parameter combination
         param_id = f"eps_final={epsilon_final}_eps_decay_last_frame={eps_decay_last_frame}_learning_rate={learning_rate}"
@@ -186,7 +180,7 @@ if __name__ == "__main__":
         epsilon = EPSILON_START
 
         # Initialize optimizer
-        optimizer = optim.Adam(net.parameters(), lr=learning_rate)
+        optimizer = optim.Adam(net.parameters(), lr=LEARNING_RATE)
 
         # Initialize total rewards
         total_rewards = []
