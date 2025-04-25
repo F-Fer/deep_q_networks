@@ -41,11 +41,24 @@ class BufferWrapper(gym.ObservationWrapper):
     def observation(self, observation: np.ndarray) -> np.ndarray:
         self.buffer.append(observation)
         return np.concatenate(self.buffer)
+    
+
+class NegativeTerminalRewardWrapper(gym.RewardWrapper):
+    def __init__(self, env, terminal_reward: float = -1.0):
+        super().__init__(env)
+        self.terminal_reward = terminal_reward
+
+    def step(self, action):
+        obs, reward, done, truncated, info = self.env.step(action)
+        if done or truncated:
+            reward += self.terminal_reward
+        return obs, reward, done, truncated, info
 
 
 def make_env(env_name: str, **kwargs):
     env = gym.make(env_name, **kwargs)
     env = atari_wrappers.AtariWrapper(env, clip_reward=True, noop_max=0)
+    env = NegativeTerminalRewardWrapper(env, terminal_reward=-1.0)
     env = ImageToPyTorch(env)
     env = BufferWrapper(env, n_steps=4)
     return env
