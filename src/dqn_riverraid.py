@@ -18,7 +18,7 @@ from torch.utils.tensorboard.writer import SummaryWriter
 
 DEFAULT_ENV_NAME = "RiverraidNoFrameskip-v4"
 DEFAULT_MODEL_DIR = "models"
-MEAN_REWARD_BOUND = 10_000
+MEAN_REWARD_BOUND = 100
 MAX_FRAMES = 1_000_000
 
 GAMMA = 0.99
@@ -148,80 +148,65 @@ if __name__ == "__main__":
     args = parser.parse_args()
     device = torch.device(args.dev)
 
-    # Initialize parameter grid
-    param_grid = {
-        "eps_final": [0.05, 0.01, 0.005],
-        "eps_decay_last_frame": [500_000, 1_000_000]
-    }
-    param_combinations = [
-        dict(zip(param_grid.keys(), values))
-        for values in itertools.product(*param_grid.values())
-    ]
+    # Define unique identifier for this parameter combination
+    param_id = f"eps_final={EPSILON_FINAL}_eps_decay_last_frame={EPSILON_DECAY_LAST_FRAME}_learning_rate={LEARNING_RATE}"
+    print(f"Running {param_id}")
 
-    # Outer loop of parameter grid
-    for params in param_combinations:
-        epsilon_final = params["eps_final"]
-        eps_decay_last_frame = params["eps_decay_last_frame"]
+    # Initialize environment
+    env = wrappers.make_env(args.env)
+    net = dqn_model.DQN(env.observation_space.shape, env.action_space.n).to(device)
+    tgt_net = dqn_model.DQN(env.observation_space.shape, env.action_space.n).to(device)
+    writer = SummaryWriter(comment="-" + args.env + "_" + param_id)
+    print(net)
 
-        # Define unique identifier for this parameter combination
-        param_id = f"eps_final={epsilon_final}_eps_decay_last_frame={eps_decay_last_frame}_learning_rate={learning_rate}"
-        print(f"Running {param_id}")
+    # Initialize experience buffer
+    buffer = ExperienceBuffer(REPLAY_SIZE)
+    agent = Agent(env, buffer)
+    epsilon = EPSILON_START
 
-        # Initialize environment
-        env = wrappers.make_env(args.env)
-        net = dqn_model.DQN(env.observation_space.shape, env.action_space.n).to(device)
-        tgt_net = dqn_model.DQN(env.observation_space.shape, env.action_space.n).to(device)
-        writer = SummaryWriter(comment="-" + args.env + "_" + param_id)
-        print(net)
+    # Initialize optimizer
+    optimizer = optim.Adam(net.parameters(), lr=LEARNING_RATE)
 
-        # Initialize experience buffer
-        buffer = ExperienceBuffer(REPLAY_SIZE)
-        agent = Agent(env, buffer)
-        epsilon = EPSILON_START
+    # Initialize total rewards
+    total_rewards = []
+    frame_idx = 0
+    ts_frame = 0
+    ts = time.time()
+    best_m_reward = None
 
-        # Initialize optimizer
-        optimizer = optim.Adam(net.parameters(), lr=LEARNING_RATE)
+    # Inner loop of parameter grid
+    for frame_idx in range(MAX_FRAMES):
+        epsilon = max(EPSILON_FINAL, EPSILON_START - frame_idx / EPSILON_DECAY_LAST_FRAME)
 
-        # Initialize total rewards
-        total_rewards = []
-        frame_idx = 0
-        ts_frame = 0
-        ts = time.time()
-        best_m_reward = None
+        reward = agent.play_step(net, device, epsilon)
+        if reward is not None:
+            total_rewards.append(reward)
+            speed = (frame_idx - ts_frame) / (time.time() - ts)
+            ts_frame = frame_idx
+            ts = time.time()
+            m_reward = np.mean(total_rewards[-100:])
+            print(f"{frame_idx}: done {len(total_rewards)} games, reward {m_reward:.3f}, "
+                f"eps {epsilon:.2f}, speed {speed:.2f} f/s")
+            writer.add_scalar("epsilon", epsilon, frame_idx)
+            writer.add_scalar("speed", speed, frame_idx)
+            writer.add_scalar("reward_100", m_reward, frame_idx)
+            writer.add_scalar("reward", reward, frame_idx)
+            if best_m_reward is None or best_m_reward < m_reward:
+                torch.save(net.state_dict(), DEFAULT_MODEL_DIR + "/" + args.env.replace("/", "_") + "_" + param_id + "-best_%.0f.dat" % m_reward)
+                if best_m_reward is not None:
+                    print(f"Best reward updated {best_m_reward:.3f} -> {m_reward:.3f}")
+                best_m_reward = m_reward
+            if m_reward > MEAN_REWARD_BOUND:
+                print("Solved in %d frames!" % frame_idx)
+                break
+        if len(buffer) < REPLAY_START_SIZE:
+            continue
+        if frame_idx % SYNC_TARGET_FRAMES == 0:
+            tgt_net.load_state_dict(net.state_dict())
 
-        # Inner loop of parameter grid
-        for frame_idx in range(MAX_FRAMES):
-            epsilon = max(epsilon_final, EPSILON_START - frame_idx / eps_decay_last_frame)
-
-            reward = agent.play_step(net, device, epsilon)
-            if reward is not None:
-                total_rewards.append(reward)
-                speed = (frame_idx - ts_frame) / (time.time() - ts)
-                ts_frame = frame_idx
-                ts = time.time()
-                m_reward = np.mean(total_rewards[-100:])
-                print(f"{frame_idx}: done {len(total_rewards)} games, reward {m_reward:.3f}, "
-                    f"eps {epsilon:.2f}, speed {speed:.2f} f/s")
-                writer.add_scalar("epsilon", epsilon, frame_idx)
-                writer.add_scalar("speed", speed, frame_idx)
-                writer.add_scalar("reward_100", m_reward, frame_idx)
-                writer.add_scalar("reward", reward, frame_idx)
-                if best_m_reward is None or best_m_reward < m_reward:
-                    torch.save(net.state_dict(), DEFAULT_MODEL_DIR + "/" + args.env.replace("/", "_") + "_" + param_id + "-best_%.0f.dat" % m_reward)
-                    if best_m_reward is not None:
-                        print(f"Best reward updated {best_m_reward:.3f} -> {m_reward:.3f}")
-                    best_m_reward = m_reward
-                if m_reward > MEAN_REWARD_BOUND:
-                    print("Solved in %d frames!" % frame_idx)
-                    break
-            if len(buffer) < REPLAY_START_SIZE:
-                continue
-            if frame_idx % SYNC_TARGET_FRAMES == 0:
-                tgt_net.load_state_dict(net.state_dict())
-
-            optimizer.zero_grad()
-            batch = buffer.sample(BATCH_SIZE)
-            loss_t = calc_loss(batch, net, tgt_net, device)
-            loss_t.backward()
-            optimizer.step()
-        writer.close()
+        optimizer.zero_grad()
+        batch = buffer.sample(BATCH_SIZE)
+        loss_t = calc_loss(batch, net, tgt_net, device)
+        loss_t.backward()
+        optimizer.step()
+    writer.close()
