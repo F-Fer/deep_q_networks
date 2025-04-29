@@ -18,19 +18,19 @@ from torch.utils.tensorboard.writer import SummaryWriter
 
 DEFAULT_ENV_NAME = "RiverraidNoFrameskip-v4"
 DEFAULT_MODEL_DIR = "models"
-MEAN_REWARD_BOUND = 100
-MAX_FRAMES = 1_000_000
+MEAN_REWARD_BOUND = 10_000
+MAX_FRAMES = 3_000_000
 
 GAMMA = 0.99
 BATCH_SIZE = 32
-REPLAY_SIZE = 500_000
-LEARNING_RATE = 1e-4
+REPLAY_SIZE = 1_000_000
+LEARNING_RATE = 0.00025 #1e-4
 SYNC_TARGET_FRAMES = 10_000
-REPLAY_START_SIZE = 10_000
+REPLAY_START_SIZE = 50_000
 
-EPSILON_DECAY_LAST_FRAME = 500_000
+EPSILON_DECAY_LAST_FRAME = 1_000_000
 EPSILON_START = 1.0
-EPSILON_FINAL = 0.05
+EPSILON_FINAL = 0.1
 
 State = np.ndarray
 Action = int
@@ -149,14 +149,17 @@ if __name__ == "__main__":
     device = torch.device(args.dev)
 
     # Define unique identifier for this parameter combination
-    param_id = f"eps_final={EPSILON_FINAL}_eps_decay_last_frame={EPSILON_DECAY_LAST_FRAME}_learning_rate={LEARNING_RATE}"
-    print(f"Running {param_id}")
+    env_changes = "ClippedReward_NoKeepAlive_WithFrameSkip_NoRepeatAction_NegTrmlRwd=-10_NoopMax=30"
+    param_id = f"ReplaySize={REPLAY_SIZE}_LearningRate={LEARNING_RATE}_EpsilonFinal={EPSILON_FINAL}_EpsilonDecayLastFrame={EPSILON_DECAY_LAST_FRAME}_RewardStartSize={REPLAY_START_SIZE}_Gamma={GAMMA}_BatchSize={BATCH_SIZE}"
+    param_id = env_changes + "_" + param_id
+    print(f"Running {env_changes} with {param_id}")
+    print(f"Length of param_id: {len(param_id)}")
 
     # Initialize environment
-    env = wrappers.make_env(args.env)
+    env = wrappers.make_env(args.env, frameskip=4)
     net = dqn_model.DQN(env.observation_space.shape, env.action_space.n).to(device)
     tgt_net = dqn_model.DQN(env.observation_space.shape, env.action_space.n).to(device)
-    writer = SummaryWriter(comment="-" + args.env + "_" + param_id)
+    writer = SummaryWriter(comment="-" + param_id)
     print(net)
 
     # Initialize experience buffer

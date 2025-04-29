@@ -1,6 +1,7 @@
 import typing as tt
 import gymnasium as gym
 from gymnasium import spaces
+from gymnasium.wrappers import NormalizeReward
 import collections
 import numpy as np
 from stable_baselines3.common import atari_wrappers
@@ -53,12 +54,41 @@ class NegativeTerminalRewardWrapper(gym.RewardWrapper):
         if done or truncated:
             reward += self.terminal_reward
         return obs, reward, done, truncated, info
+    
 
+class ScaleRewardWrapper(gym.RewardWrapper):
+    """Min-max scaling of rewards to [-1, 1]"""
+    def __init__(self, env, min_val: float, max_val: float):
+        super().__init__(env)
+        self.min_val = min_val
+        self.max_val = max_val
+
+    def step(self, action):
+        obs, reward, done, truncated, info = self.env.step(action)
+        scaled_reward = 2 * ((reward - self.min_val) / (self.max_val - self.min_val)) - 1
+        return obs, scaled_reward, done, truncated, info
+    
+
+class KeepAliveReward(gym.RewardWrapper):
+    """Add small reward for each step, which not leads to game over"""
+    def __init__(self, env, reward: float = 1):
+        super().__init__(env)
+        self.reward = reward
+
+    def step(self, action):
+        obs, reward, done, truncated, info = self.env.step(action)
+        new_reward = reward
+        if not done and not truncated:  
+            new_reward += self.reward
+        return obs, new_reward, done, truncated, info
+    
 
 def make_env(env_name: str, **kwargs):
     env = gym.make(env_name, **kwargs)
-    env = atari_wrappers.AtariWrapper(env, clip_reward=True, noop_max=0)
-    env = NegativeTerminalRewardWrapper(env, terminal_reward=-1.0)
+    env = atari_wrappers.AtariWrapper(env, clip_reward=True, noop_max=30, screen_size=84)
+    env = NegativeTerminalRewardWrapper(env, terminal_reward=-10.0)
+    # env = KeepAliveReward(env)
+    # env = ScaleRewardWrapper(env, -100, 100)
     env = ImageToPyTorch(env)
     env = BufferWrapper(env, n_steps=4)
     return env
