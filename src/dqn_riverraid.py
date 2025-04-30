@@ -52,18 +52,63 @@ class Experience:
 
 
 class ExperienceBuffer:
-    def __init__(self, capacity: int):
+    """
+    Experience buffer with prioritized experience replay.
+    """
+    def __init__(self, capacity: int, alpha=0.6):
         self.buffer = collections.deque(maxlen=capacity)
+        self.priorities = np.zeros(capacity, dtype=np.float32)
+        self.alpha = alpha
+        self.pos = 0
+        self.capacity = capacity
 
     def __len__(self):
         return len(self.buffer)
 
     def append(self, experience: Experience):
-        self.buffer.append(experience)
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(experience)
+        else:
+            self.buffer[self.pos] = experience
+        
+        # Set priority to max priority for new experiences
+        max_priority = self.priorities.max() if self.buffer else 1.0
+        if len(self.priorities) < self.capacity:
+            self.priorities = np.append(self.priorities, max_priority)
+        else:
+            self.priorities[self.pos] = max_priority
+        
+        self.pos = (self.pos + 1) % self.capacity
 
-    def sample(self, batch_size: int) -> tt.List[Experience]:
-        indices = np.random.choice(len(self), batch_size, replace=False)
-        return [self.buffer[idx] for idx in indices]
+    def sample(self, batch_size: int, beta=0.4) -> tt.Tuple[tt.List[Experience], np.ndarray, np.ndarray]:
+        if len(self.buffer) == self.capacity:
+            priorities = self.priorities
+        else:
+            priorities = self.priorities[:len(self.buffer)]
+
+        priorities = np.maximum(priorities, 1e-8)  # Ensure no zeros
+        if np.any(np.isnan(priorities)):
+            priorities = np.ones_like(priorities)  # Replace NaNs with 1s
+        
+        # Sample using priorities
+        probs = priorities ** self.alpha
+        probs /= probs.sum()
+        
+        indices = np.random.choice(len(self.buffer), batch_size, p=probs, replace=False)
+        samples = [self.buffer[idx] for idx in indices]
+        
+        # Calculate importance sampling weights
+        weights = (len(self.buffer) * probs[indices]) ** (-beta)
+        weights /= weights.max()
+        
+        return samples, indices, weights
+
+    def update_priorities(self, indices, priorities):
+        for idx, priority in zip(indices, priorities):
+            # Safety check to prevent NaN or infinite values
+            if np.isnan(priority) or np.isinf(priority):
+                priority = 1.0
+            self.priorities[idx] = max(priority, 1e-8)  
 
 class Agent:
     def __init__(self, env: gym.Env, exp_buffer: ExperienceBuffer):
@@ -123,20 +168,36 @@ def batch_to_tensors(batch: tt.List[Experience], device: torch.device) -> BatchT
            dones_t.to(device),  new_states_t.to(device)
 
 
-def calc_loss(batch: tt.List[Experience], net: dqn_model.DQN, tgt_net: dqn_model.DQN,
-              device: torch.device) -> torch.Tensor:
+def calc_loss(batch, indices, weights, net, tgt_net, device):
     states_t, actions_t, rewards_t, dones_t, new_states_t = batch_to_tensors(batch, device)
-
-    state_action_values = net(states_t).gather(
-        1, actions_t.unsqueeze(-1)
-    ).squeeze(-1)
+    
+    # Get current state-action values
+    state_action_values = net(states_t).gather(1, actions_t.unsqueeze(-1)).squeeze(-1)
+    
     with torch.no_grad():
-        next_state_values = tgt_net(new_states_t).max(1)[0]
+        # Get next state values using Double DQN approach
+        next_actions = net(new_states_t).argmax(dim=1)
+        next_state_values = tgt_net(new_states_t).gather(1, next_actions.unsqueeze(-1)).squeeze(-1)
         next_state_values[dones_t] = 0.0
-        next_state_values = next_state_values.detach()
-
-    expected_state_action_values = next_state_values * GAMMA + rewards_t
-    return nn.MSELoss()(state_action_values, expected_state_action_values)
+    
+    # Calculate expected state-action values
+    expected_state_action_values = rewards_t + GAMMA * next_state_values
+    
+    # Convert weights to tensor and calculate weighted MSE loss
+    weights_tensor = torch.tensor(weights, dtype=torch.float32, device=device)
+    td_errors = expected_state_action_values - state_action_values
+    
+    # Clamp TD errors to prevent extreme values (optional, but helps stability)
+    td_errors_clipped = torch.clamp(td_errors, -1.0, 1.0)
+    
+    # Calculate weighted loss
+    loss = (weights_tensor * td_errors_clipped.pow(2)).mean()
+    
+    # For priority updates, use non-clipped TD errors
+    with torch.no_grad():
+        td_abs_errors = torch.abs(td_errors).detach().cpu().numpy()
+    
+    return loss, td_abs_errors
 
 
 if __name__ == "__main__":
@@ -149,7 +210,7 @@ if __name__ == "__main__":
     device = torch.device(args.dev)
 
     # Define unique identifier for this parameter combination
-    env_changes = "ClippedReward_NoKeepAlive_WithFrameSkip_NoRepeatAction_NegTrmlRwd=-10_NoopMax=30"
+    env_changes = "ClippedReward_PrioReplay_WithFrameSkip_NoRepeatAction_NegTrmlRwd=-10_NoopMax=30"
     param_id = f"ReplaySize={REPLAY_SIZE}_LearningRate={LEARNING_RATE}_EpsilonFinal={EPSILON_FINAL}_EpsilonDecayLastFrame={EPSILON_DECAY_LAST_FRAME}_RewardStartSize={REPLAY_START_SIZE}_Gamma={GAMMA}_BatchSize={BATCH_SIZE}"
     param_id = env_changes + "_" + param_id
     print(f"Running {env_changes} with {param_id}")
@@ -208,8 +269,12 @@ if __name__ == "__main__":
             tgt_net.load_state_dict(net.state_dict())
 
         optimizer.zero_grad()
-        batch = buffer.sample(BATCH_SIZE)
-        loss_t = calc_loss(batch, net, tgt_net, device)
+        batch, indices, weights = buffer.sample(BATCH_SIZE)
+        loss_t, td_errors = calc_loss(batch, indices, weights, net, tgt_net, device)
         loss_t.backward()
         optimizer.step()
+
+        # Update priorities
+        priorities = np.clip(td_errors + 1e-5, 0, 10)  
+        buffer.update_priorities(indices, priorities)
     writer.close()
