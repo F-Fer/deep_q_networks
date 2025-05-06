@@ -29,6 +29,7 @@ REPLAY_SIZE = 250_000
 LEARNING_RATE = 0.00025 #1e-4
 SYNC_TARGET_FRAMES = 10_000
 REPLAY_START_SIZE = 50_000
+FRAMESKIP = 2
 
 # Parameters for the epsilon-greedy exploration
 EPSILON_DECAY_LAST_FRAME = 250_000
@@ -224,14 +225,14 @@ if __name__ == "__main__":
 
     # Define unique identifier for this parameter combination
     model_type = "NoisyDQN" if use_noisy else "DQN"
-    env_changes = f"{model_type}_ClipRwd_PrioReplay_WithFrmSkip_NoRptAction_FuelReward_NegTrmlRwd=-50_NoopMax=30_ActionMask"
-    param_id = f"ReplaySize={REPLAY_SIZE}_LR={LEARNING_RATE}_EpsFinal={epsilon_final}_EpsDecayLastFrame={EPSILON_DECAY_LAST_FRAME}_RedStartSize={REPLAY_START_SIZE}_Gamma={GAMMA}_BatchSize={BATCH_SIZE}"
+    env_changes = f"{model_type}_ClipRwd_PrioReplay_WithFrmSkip_NoRptAction_FuelReward_NegTrmlRwd=-100_NoopMax=30_ActionMask"
+    param_id = f"FrmSkip={FRAMESKIP}_RplSize={REPLAY_SIZE}_LR={LEARNING_RATE}_EpsFinal={epsilon_final}_EpsDecayLastFrame={EPSILON_DECAY_LAST_FRAME}_RedStartSize={REPLAY_START_SIZE}_Gamma={GAMMA}_BatchSize={BATCH_SIZE}"
     param_id = env_changes + "_" + param_id
     print(f"Running {env_changes} with {param_id}")
     print(f"Length of param_id: {len(param_id)}")
 
     # Initialize environment
-    env = wrappers.make_env(args.env, frameskip=4)
+    env = wrappers.make_env(args.env, frameskip=FRAMESKIP)
     
     # Initialize network based on use_noisy
     if use_noisy:

@@ -163,7 +163,7 @@ class CuriosityWrapper(gym.Wrapper):
 def make_env(env_name: str, **kwargs):
     env = gym.make(env_name, **kwargs)
     env = atari_wrappers.AtariWrapper(env, clip_reward=True, noop_max=30, screen_size=84)
-    env = NegativeTerminalRewardWrapper(env, terminal_reward=-50.0)
+    env = NegativeTerminalRewardWrapper(env, terminal_reward=-100.0)
     env = FuelRewardWrapper(env, reward=1.0)
     env = ActionMaskWrapper(env)
     env = ImageToPyTorch(env)
