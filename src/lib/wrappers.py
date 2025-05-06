@@ -83,6 +83,27 @@ class KeepAliveReward(gym.RewardWrapper):
         return obs, new_reward, done, truncated, info
 
 
+class FuelRewardWrapper(gym.RewardWrapper):
+    """
+    Adds a reward when the agent collects fuel in Riverraid.
+    Uses ALE to access the game's RAM and monitor fuel level changes.
+    """
+    def __init__(self, env, reward: float = 1.0):
+        super().__init__(env)
+        self.fuel_reward = reward
+        # The fuel level in Riverraid is stored at RAM address 120 (0x78)
+        self.fuel_address = 120
+        
+    def step(self, action):
+        obs, reward, done, truncated, info = self.env.step(action)
+        if not done and not truncated:
+            ram = self.env.unwrapped.ale.getRAM()
+            entered_fuel_deposit = ram[self.fuel_address] == 3
+            if entered_fuel_deposit:
+                reward += self.fuel_reward
+        return obs, reward, done, truncated, info
+
+
 class ActionMaskWrapper(gym.Wrapper):
     """
     Wrapper to go from 18 actions to 5 actions.
@@ -143,6 +164,7 @@ def make_env(env_name: str, **kwargs):
     env = gym.make(env_name, **kwargs)
     env = atari_wrappers.AtariWrapper(env, clip_reward=True, noop_max=30, screen_size=84)
     env = NegativeTerminalRewardWrapper(env, terminal_reward=-50.0)
+    env = FuelRewardWrapper(env, reward=1.0)
     env = ActionMaskWrapper(env)
     env = ImageToPyTorch(env)
     env = BufferWrapper(env, n_steps=4)

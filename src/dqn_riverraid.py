@@ -224,7 +224,7 @@ if __name__ == "__main__":
 
     # Define unique identifier for this parameter combination
     model_type = "NoisyDQN" if use_noisy else "DQN"
-    env_changes = f"{model_type}_ClipRwd_PrioReplay_WithFrmSkip_NoRptAction_NegTrmlRwd=-50_NoopMax=30_ActionMask"
+    env_changes = f"{model_type}_ClipRwd_PrioReplay_WithFrmSkip_NoRptAction_FuelReward_NegTrmlRwd=-50_NoopMax=30_ActionMask"
     param_id = f"ReplaySize={REPLAY_SIZE}_LR={LEARNING_RATE}_EpsFinal={epsilon_final}_EpsDecayLastFrame={EPSILON_DECAY_LAST_FRAME}_RedStartSize={REPLAY_START_SIZE}_Gamma={GAMMA}_BatchSize={BATCH_SIZE}"
     param_id = env_changes + "_" + param_id
     print(f"Running {env_changes} with {param_id}")

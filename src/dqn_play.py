@@ -8,12 +8,12 @@ import os
 import torch
 
 from lib import wrappers
-from lib import dqn_model
+from lib.noisy_dqn_model import NoisyDQN
 
 import collections
 
 DEFAULT_ENV_NAME = "RiverraidNoFrameskip-v4"
-DEFAULT_MODEL = "models/RiverraidNoFrameskip-v4_ClippedReward_PrioReplay_WithFrameSkip_NoRepeatAction_NegTrmlRwd=-10_NoopMax=30_ReplaySize=1000000_LearningRate=0.00025_EpsilonFinal=0.01_EpsilonDecayLastFrame=500000_RewardStartSize=50000_Gamma=0.99_BatchSize=32-best_0.dat"
+DEFAULT_MODEL = "/home/finnf/dev/deep_q_networks/models/RiverraidNoFrameskip-v4_NoisyDQN_ClipRwd_PrioReplay_WithFrmSkip_NoRptAction_FuelReward_NegTrmlRwd=-50_NoopMax=30_ActionMask_ReplaySize=250000_LR=0.00025_EpsFinal=0.0_EpsDecayLastFrame=250000_RedStartSize=50000_Gamma=0.99_BatchSize=32-best_-32.dat"
 DEFAULT_RECORD_DIR = "recordings"
 
 if __name__ == "__main__":
@@ -30,7 +30,7 @@ if __name__ == "__main__":
 
     env = wrappers.make_env(args.env, render_mode="rgb_array", frameskip=4)
     env = gym.wrappers.RecordVideo(env, video_folder=record_dir)
-    net = dqn_model.DQN(env.observation_space.shape, env.action_space.n)
+    net = NoisyDQN(env.observation_space.shape, env.action_space.n)
     state = torch.load(args.model, map_location=lambda stg, _: stg, weights_only=True)
     net.load_state_dict(state)
 
