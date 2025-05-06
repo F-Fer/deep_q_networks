@@ -1,6 +1,8 @@
 import gymnasium as gym
 from lib import dqn_model
 from lib import wrappers
+from lib.noisy_dqn_model import NoisyDQN
+import typing as tt
 
 from dataclasses import dataclass
 import argparse
@@ -28,9 +30,12 @@ LEARNING_RATE = 0.00025 #1e-4
 SYNC_TARGET_FRAMES = 10_000
 REPLAY_START_SIZE = 50_000
 
+# Parameters for the epsilon-greedy exploration
 EPSILON_DECAY_LAST_FRAME = 250_000
 EPSILON_START = 1.0
 EPSILON_FINAL = 0.01
+# How often to reset noise in the noisy layers
+NOISE_RESET_FRAMES = 1000
 
 State = np.ndarray
 Action = int
@@ -122,11 +127,11 @@ class Agent:
         self.total_reward = 0.0
 
     @torch.no_grad()
-    def play_step(self, net: dqn_model.DQN, device: torch.device,
-                  epsilon: float = 0.0) -> tt.Optional[float]:
+    def play_step(self, net, device: torch.device,
+                  epsilon: float = 0.0, use_noisy: bool = False) -> tt.Optional[float]:
         done_reward = None
 
-        if np.random.random() < epsilon:
+        if (not use_noisy and np.random.random() < epsilon) or (use_noisy and np.random.random() < epsilon):
             action = env.action_space.sample()
         else:
             state_v = torch.as_tensor(self.state).to(device)
@@ -206,27 +211,43 @@ if __name__ == "__main__":
     parser.add_argument("--dev", default="cpu", help="Device name, default=cpu")
     parser.add_argument("--env", default=DEFAULT_ENV_NAME,
                         help="Name of the environment, default=" + DEFAULT_ENV_NAME)
+    parser.add_argument("--noisy", action="store_true", help="Use NoisyDQN instead of standard DQN")
     args = parser.parse_args()
     device = torch.device(args.dev)
+    
+    # Get use_noisy flag from args
+    use_noisy = args.noisy
+    
+    # Adjust epsilon parameters if using noisy networks
+    epsilon_start = 0.1 if use_noisy else EPSILON_START
+    epsilon_final = 0.0 if use_noisy else EPSILON_FINAL
 
     # Define unique identifier for this parameter combination
-    env_changes = "ClipRwd_PrioReplay_WithFrmSkip_NoRptAction_NegTrmlRwd=-50_NoopMax=30_ActionMask"
-    param_id = f"ReplaySize={REPLAY_SIZE}_LearningRate={LEARNING_RATE}_EpsilonFinal={EPSILON_FINAL}_EpsilonDecayLastFrame={EPSILON_DECAY_LAST_FRAME}_RewardStartSize={REPLAY_START_SIZE}_Gamma={GAMMA}_BatchSize={BATCH_SIZE}"
+    model_type = "NoisyDQN" if use_noisy else "DQN"
+    env_changes = f"{model_type}_ClipRwd_PrioReplay_WithFrmSkip_NoRptAction_NegTrmlRwd=-50_NoopMax=30_ActionMask"
+    param_id = f"ReplaySize={REPLAY_SIZE}_LR={LEARNING_RATE}_EpsFinal={epsilon_final}_EpsDecayLastFrame={EPSILON_DECAY_LAST_FRAME}_RedStartSize={REPLAY_START_SIZE}_Gamma={GAMMA}_BatchSize={BATCH_SIZE}"
     param_id = env_changes + "_" + param_id
     print(f"Running {env_changes} with {param_id}")
     print(f"Length of param_id: {len(param_id)}")
 
     # Initialize environment
     env = wrappers.make_env(args.env, frameskip=4)
-    net = dqn_model.DQN(env.observation_space.shape, env.action_space.n).to(device)
-    tgt_net = dqn_model.DQN(env.observation_space.shape, env.action_space.n).to(device)
+    
+    # Initialize network based on use_noisy
+    if use_noisy:
+        net = NoisyDQN(env.observation_space.shape, env.action_space.n).to(device)
+        tgt_net = NoisyDQN(env.observation_space.shape, env.action_space.n).to(device)
+    else:
+        net = dqn_model.DQN(env.observation_space.shape, env.action_space.n).to(device)
+        tgt_net = dqn_model.DQN(env.observation_space.shape, env.action_space.n).to(device)
+    
     writer = SummaryWriter(comment="-" + param_id)
     print(net)
 
     # Initialize experience buffer
     buffer = ExperienceBuffer(REPLAY_SIZE)
     agent = Agent(env, buffer)
-    epsilon = EPSILON_START
+    epsilon = epsilon_start
 
     # Initialize optimizer
     optimizer = optim.Adam(net.parameters(), lr=LEARNING_RATE)
@@ -240,9 +261,15 @@ if __name__ == "__main__":
 
     # Inner loop of parameter grid
     for frame_idx in range(MAX_FRAMES):
-        epsilon = max(EPSILON_FINAL, EPSILON_START - frame_idx / EPSILON_DECAY_LAST_FRAME)
-
-        reward = agent.play_step(net, device, epsilon)
+        # Update epsilon for epsilon-greedy exploration (less/none needed with noisy nets)
+        if not use_noisy:
+            epsilon = max(epsilon_final, epsilon_start - frame_idx / EPSILON_DECAY_LAST_FRAME)
+        
+        # Reset noise periodically if using noisy networks
+        if use_noisy and frame_idx % NOISE_RESET_FRAMES == 0:
+            net.reset_noise()
+            
+        reward = agent.play_step(net, device, epsilon, use_noisy)
         if reward is not None:
             total_rewards.append(reward)
             speed = (frame_idx - ts_frame) / (time.time() - ts)
@@ -255,6 +282,13 @@ if __name__ == "__main__":
             writer.add_scalar("speed", speed, frame_idx)
             writer.add_scalar("reward_100", m_reward, frame_idx)
             writer.add_scalar("reward", reward, frame_idx)
+            
+            # Log SNR if using noisy networks
+            if use_noisy and frame_idx % 1000 == 0:
+                snr_values = net.noisy_layers_sigma_snr()
+                for i, snr in enumerate(snr_values):
+                    writer.add_scalar(f"snr/layer_{i}", snr, frame_idx)
+                    
             if best_m_reward is None or best_m_reward < m_reward:
                 torch.save(net.state_dict(), DEFAULT_MODEL_DIR + "/" + args.env.replace("/", "_") + "_" + param_id + "-best_%.0f.dat" % m_reward)
                 if best_m_reward is not None:
@@ -267,6 +301,9 @@ if __name__ == "__main__":
             continue
         if frame_idx % SYNC_TARGET_FRAMES == 0:
             tgt_net.load_state_dict(net.state_dict())
+            # Also reset target network noise if using noisy nets
+            if use_noisy:
+                tgt_net.reset_noise()
 
         optimizer.zero_grad()
         batch, indices, weights = buffer.sample(BATCH_SIZE)
