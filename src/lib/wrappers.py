@@ -81,14 +81,69 @@ class KeepAliveReward(gym.RewardWrapper):
         if not done and not truncated:  
             new_reward += self.reward
         return obs, new_reward, done, truncated, info
+
+
+class ActionMaskWrapper(gym.Wrapper):
+    """
+    Wrapper to go from 18 actions to 5 actions.
+    """
+
+    KEY_ACTION_MAP = [
+        2,   # Fire
+        8,   # Move right
+        4,   # Move left
+        5,   # Do nothing/slow down
+        1,   # Alternative fire
+    ]
+
+    def __init__(self, env):
+        super().__init__(env)
+        self.action_space = spaces.Discrete(len(self.KEY_ACTION_MAP))
+
+    def step(self, action):
+        return self.env.step(self.KEY_ACTION_MAP[action])
+
+class CuriosityWrapper(gym.Wrapper):
+    def __init__(self, env, visitation_counts=None, bonus_scale=0.01):
+        super().__init__(env)
+        # Use a hash table to store state visitation counts
+        self.visitation_counts = {} if visitation_counts is None else visitation_counts
+        self.bonus_scale = bonus_scale
+        
+    def step(self, action):
+        obs, reward, done, trunc, info = self.env.step(action)
+        
+        state_hash = self._hash_observation(obs)
+        
+        # Update visitation count
+        if state_hash in self.visitation_counts:
+            self.visitation_counts[state_hash] += 1
+        else:
+            self.visitation_counts[state_hash] = 1
+        
+        # Calculate novelty bonus (higher for less-visited states)
+        count = self.visitation_counts[state_hash]
+        novelty_bonus = self.bonus_scale / np.sqrt(count)
+        
+        # Add to reward
+        augmented_reward = reward + novelty_bonus
+        
+        return obs, augmented_reward, done, trunc, info
+    
+    def _hash_observation(self, obs):
+        # Convert high-dimensional observation to a simpler hash
+        # e.g., subsample or create a feature vector
+        # For Atari, a simple approach is to downsample and binarize
+        downsampled = obs[0, ::4, ::4]  # Take first channel and downsample
+        binary = (downsampled > 128).astype(int)  # Binarize
+        return hash(binary.tobytes())  # Create hash
     
 
 def make_env(env_name: str, **kwargs):
     env = gym.make(env_name, **kwargs)
     env = atari_wrappers.AtariWrapper(env, clip_reward=True, noop_max=30, screen_size=84)
-    env = NegativeTerminalRewardWrapper(env, terminal_reward=-10.0)
-    # env = KeepAliveReward(env)
-    # env = ScaleRewardWrapper(env, -100, 100)
+    env = NegativeTerminalRewardWrapper(env, terminal_reward=-50.0)
+    env = ActionMaskWrapper(env)
     env = ImageToPyTorch(env)
     env = BufferWrapper(env, n_steps=4)
     return env

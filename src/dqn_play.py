@@ -3,6 +3,7 @@ import gymnasium as gym
 import argparse
 import numpy as np
 import typing as tt
+import os
 
 import torch
 
@@ -11,19 +12,24 @@ from lib import dqn_model
 
 import collections
 
-DEFAULT_ENV_NAME = "PongNoFrameskip-v4"
-
+DEFAULT_ENV_NAME = "RiverraidNoFrameskip-v4"
+DEFAULT_MODEL = "models/RiverraidNoFrameskip-v4_ClippedReward_PrioReplay_WithFrameSkip_NoRepeatAction_NegTrmlRwd=-10_NoopMax=30_ReplaySize=1000000_LearningRate=0.00025_EpsilonFinal=0.01_EpsilonDecayLastFrame=500000_RewardStartSize=50000_Gamma=0.99_BatchSize=32-best_0.dat"
+DEFAULT_RECORD_DIR = "recordings"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--model", required=True, help="Model file to load")
+    parser.add_argument("-m", "--model", default=DEFAULT_MODEL)
     parser.add_argument("-e", "--env", default=DEFAULT_ENV_NAME,
                         help="Environment name to use, default=" + DEFAULT_ENV_NAME)
-    parser.add_argument("-r", "--record", required=True, help="Directory for video")
+    parser.add_argument("-r", "--record", default=DEFAULT_RECORD_DIR)
     args = parser.parse_args()
 
-    env = wrappers.make_env(args.env, render_mode="rgb_array")
-    env = gym.wrappers.RecordVideo(env, video_folder=args.record)
+    record_dir = args.record + "/" + DEFAULT_MODEL.split("/")[-1].split(".")[0]
+    if not os.path.exists(record_dir):
+        os.makedirs(record_dir)
+
+    env = wrappers.make_env(args.env, render_mode="rgb_array", frameskip=4)
+    env = gym.wrappers.RecordVideo(env, video_folder=record_dir)
     net = dqn_model.DQN(env.observation_space.shape, env.action_space.n)
     state = torch.load(args.model, map_location=lambda stg, _: stg, weights_only=True)
     net.load_state_dict(state)

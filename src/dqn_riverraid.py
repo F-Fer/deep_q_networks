@@ -23,14 +23,14 @@ MAX_FRAMES = 3_000_000
 
 GAMMA = 0.99
 BATCH_SIZE = 32
-REPLAY_SIZE = 1_000_000
+REPLAY_SIZE = 250_000
 LEARNING_RATE = 0.00025 #1e-4
 SYNC_TARGET_FRAMES = 10_000
 REPLAY_START_SIZE = 50_000
 
-EPSILON_DECAY_LAST_FRAME = 1_000_000
+EPSILON_DECAY_LAST_FRAME = 250_000
 EPSILON_START = 1.0
-EPSILON_FINAL = 0.1
+EPSILON_FINAL = 0.01
 
 State = np.ndarray
 Action = int
@@ -210,7 +210,7 @@ if __name__ == "__main__":
     device = torch.device(args.dev)
 
     # Define unique identifier for this parameter combination
-    env_changes = "ClippedReward_PrioReplay_WithFrameSkip_NoRepeatAction_NegTrmlRwd=-10_NoopMax=30"
+    env_changes = "ClipRwd_PrioReplay_WithFrmSkip_NoRptAction_NegTrmlRwd=-50_NoopMax=30_ActionMask"
     param_id = f"ReplaySize={REPLAY_SIZE}_LearningRate={LEARNING_RATE}_EpsilonFinal={EPSILON_FINAL}_EpsilonDecayLastFrame={EPSILON_DECAY_LAST_FRAME}_RewardStartSize={REPLAY_START_SIZE}_Gamma={GAMMA}_BatchSize={BATCH_SIZE}"
     param_id = env_changes + "_" + param_id
     print(f"Running {env_changes} with {param_id}")
