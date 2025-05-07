@@ -110,11 +110,11 @@ class ActionMaskWrapper(gym.Wrapper):
     """
 
     KEY_ACTION_MAP = [
-        2,   # Fire
-        8,   # Move right
+        0,   # Do nothing
+        1,   # Fire
+        3,   # Move right
         4,   # Move left
-        5,   # Do nothing/slow down
-        1,   # Alternative fire
+        5,   # slow down
     ]
 
     def __init__(self, env):
@@ -222,6 +222,7 @@ def make_env(
         screen_size: int = 84, 
         terminal_reward: float = -100.0,
         fuel_reward: float = 0.1,
+        render_mode: str = None,
         **kwargs
     ):
     """
@@ -233,8 +234,9 @@ def make_env(
         sticky_action_prob: Probability of repeating the previous action (stickiness)
         random_start_frames: Maximum number of no-op actions at the start of an episode
         screen_size: Size of the screen to downsample to
+        render_mode: Mode for rendering the environment (e.g., "rgb_array" for video recording)
     """
-    env = gym.make(env_name, **kwargs)
+    env = gym.make(env_name, render_mode=render_mode, **kwargs)
     
     # Standard Atari preprocessing
     env = atari_wrappers.AtariWrapper(
