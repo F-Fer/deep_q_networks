@@ -4,6 +4,8 @@ import argparse
 import numpy as np
 import typing as tt
 import os
+import sys
+import re
 
 import torch
 
@@ -13,29 +15,92 @@ from lib.noisy_dqn_model import NoisyDQN
 import collections
 
 DEFAULT_ENV_NAME = "RiverraidNoFrameskip-v4"
-DEFAULT_MODEL = "models/RiverraidNoFrameskip-v4_NoisyDQN_ScreenSize=84_Sticky=0.2_RandStart=30_FrmSkip=2_RplSize=500000_LR=0.0001-best_-100.dat"
+DEFAULT_MODEL = "models/RiverraidNoFrameskip-v4_NoisyDQN_ScreenSize=84_Sticky=0.25_RandStart=20_UseActionMask_FrmSkip=2_RplSize=500000_LR=0.0001-best_eval_-88.dat"
 DEFAULT_RECORD_DIR = "recordings"
 
-# Defaults from dqn_riverraid.py for new arguments
-DEFAULT_FRAMESKIP = 2
-DEFAULT_STICKY_ACTION_PROB = 0.0
-DEFAULT_RANDOM_START_FRAMES = 30
+# Ultimate fallback defaults (aligned with dqn_riverraid.py defaults)
+SCRIPT_DEFAULT_FRAMESKIP = 2
+SCRIPT_DEFAULT_STICKY_ACTION_PROB = 0.0
+SCRIPT_DEFAULT_RANDOM_START_FRAMES = 30 # dqn_riverraid.py uses 30
+SCRIPT_DEFAULT_USE_ACTION_MASK = False
+SCRIPT_DEFAULT_FRAME_SIZE = 84
+
+def parse_model_filename_for_defaults(model_path: str) -> dict:
+    """Parses known hyperparameters from the model filename."""
+    defaults = {
+        "frameskip": SCRIPT_DEFAULT_FRAMESKIP,
+        "sticky": SCRIPT_DEFAULT_STICKY_ACTION_PROB,
+        "random_starts": SCRIPT_DEFAULT_RANDOM_START_FRAMES,
+        "use_action_mask": SCRIPT_DEFAULT_USE_ACTION_MASK,
+        "screen_size": SCRIPT_DEFAULT_FRAME_SIZE
+    }
+    if not model_path:
+        return defaults
+
+    model_filename = os.path.basename(model_path)
+    
+    fs_match = re.search(r"_FrmSkip=(\d+)", model_filename)
+    if fs_match:
+        defaults["frameskip"] = int(fs_match.group(1))
+
+    sticky_match = re.search(r"_Sticky=([\d\.]+)", model_filename)
+    if sticky_match:
+        defaults["sticky"] = float(sticky_match.group(1))
+
+    rs_match = re.search(r"_RandStart=(\d+)", model_filename)
+    if rs_match:
+        defaults["random_starts"] = int(rs_match.group(1))
+
+    if re.search(r"_UseActionMask", model_filename):
+        defaults["use_action_mask"] = True
+
+    screen_size_match = re.search(r"_ScreenSize=(\d+)", model_filename)
+    if screen_size_match:
+        defaults["screen_size"] = int(screen_size_match.group(1))
+        
+    return defaults
 
 if __name__ == "__main__":
+    model_path_for_defaults = DEFAULT_MODEL 
+    # Check if -m or --model is in sys.argv to override
+    for i, arg_val in enumerate(sys.argv):
+        if arg_val == '-m' or arg_val == '--model':
+            if i + 1 < len(sys.argv):
+                model_path_for_defaults = sys.argv[i+1]
+            break
+    
+    parsed_defaults = parse_model_filename_for_defaults(model_path_for_defaults)
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--model", default=DEFAULT_MODEL)
+    parser.add_argument("-m", "--model", default=DEFAULT_MODEL,
+                        help=f"Path to the model file (default: {DEFAULT_MODEL})")
     parser.add_argument("-e", "--env", default=DEFAULT_ENV_NAME,
-                        help="Environment name to use, default=" + DEFAULT_ENV_NAME)
-    parser.add_argument("-r", "--record", default=DEFAULT_RECORD_DIR)
-    parser.add_argument("--frameskip", type=int, default=DEFAULT_FRAMESKIP,
-                        help=f"Number of frames to skip (default: {DEFAULT_FRAMESKIP})")
-    parser.add_argument("--sticky", type=float, default=DEFAULT_STICKY_ACTION_PROB,
-                        help=f"Probability of sticky actions (default: {DEFAULT_STICKY_ACTION_PROB})")
-    parser.add_argument("--random-starts", type=int, default=DEFAULT_RANDOM_START_FRAMES,
-                        help=f"Max random no-op actions at episode start (default: {DEFAULT_RANDOM_START_FRAMES})")
+                        help=f"Environment name to use (default: {DEFAULT_ENV_NAME})")
+    parser.add_argument("-r", "--record", default=DEFAULT_RECORD_DIR,
+                        help=f"Directory to store recordings (default: {DEFAULT_RECORD_DIR})")
+    
+    parser.add_argument("--frameskip", type=int, default=parsed_defaults["frameskip"],
+                        help=f"Number of frames to skip (default: from model filename, fallback {SCRIPT_DEFAULT_FRAMESKIP})")
+    parser.add_argument("--sticky", type=float, default=parsed_defaults["sticky"],
+                        help=f"Probability of sticky actions (default: from model filename, fallback {SCRIPT_DEFAULT_STICKY_ACTION_PROB})")
+    parser.add_argument("--random-starts", type=int, default=parsed_defaults["random_starts"],
+                        help=f"Max random no-op actions at episode start (default: from model filename, fallback {SCRIPT_DEFAULT_RANDOM_START_FRAMES})")
+    parser.add_argument("--use-action-mask", default=parsed_defaults["use_action_mask"],
+                        action=argparse.BooleanOptionalAction, # Requires Python 3.9+
+                        help="Use reduced action space (default: from model filename, fallback False)")
+    parser.add_argument("--screen-size", type=int, default=parsed_defaults["screen_size"],
+                        help=f"Screen size (default: from model filename, fallback {SCRIPT_DEFAULT_FRAME_SIZE})")
+    
     args = parser.parse_args()
 
-    record_dir = args.record + "/" + DEFAULT_MODEL.split("/")[-1].split(".")[0]
+    print("\nEffective parameters for playback:")
+    print(f"  Model: {args.model}")
+    print(f"  Frameskip: {args.frameskip}")
+    print(f"  Sticky Action Probability: {args.sticky}")
+    print(f"  Random Start Frames: {args.random_starts}")
+    print(f"  Use Action Mask: {args.use_action_mask}\n")
+
+    record_dir = args.record + "/" + os.path.basename(args.model).split(".")[0]
     if not os.path.exists(record_dir):
         os.makedirs(record_dir)
 
@@ -44,17 +109,26 @@ if __name__ == "__main__":
         frameskip=args.frameskip,
         sticky_action_prob=args.sticky,
         random_start_frames=args.random_starts,
-        terminal_reward=-100.0,
-        fuel_reward=0.1,
-        screen_size=84,
-        render_mode="rgb_array"
+        terminal_reward=-100.0,  
+        fuel_reward=0.1,        
+        screen_size=args.screen_size,         
+        render_mode="rgb_array",
+        use_action_mask=args.use_action_mask,
     )
     env = gym.wrappers.RecordVideo(env, video_folder=record_dir)
     net = NoisyDQN(env.observation_space.shape, env.action_space.n)
-    state = torch.load(args.model, map_location=lambda stg, _: stg, weights_only=True)
-    net.load_state_dict(state)
+    
+    try:
+        state_dict = torch.load(args.model, map_location=lambda stg, _: stg, weights_only=True)
+    except Exception as e:
+        print(f"Error loading model weights: {e}")
+        print("Ensure your PyTorch version is compatible with 'weights_only=True' or remove it if using an older version and trust the source.")
+        sys.exit(1)
+        
+    net.load_state_dict(state_dict)
     net.eval()
-    net.reset_noise()
+    if hasattr(net, 'reset_noise'): # Check if it's NoisyDQN
+        net.reset_noise()
 
     state, _ = env.reset()
     total_reward = 0.0
