@@ -23,6 +23,10 @@ DEFAULT_MODEL_DIR = "models"
 MEAN_REWARD_BOUND = 10_000
 MAX_FRAMES = 3_000_000
 
+# Evaluation constants
+EVAL_EVERY_FRAMES = 50_000
+EVAL_EPISODES = 10
+
 GAMMA = 0.99
 BATCH_SIZE = 32
 REPLAY_SIZE = 500_000
@@ -216,6 +220,45 @@ def calc_loss(batch, indices, weights, net, tgt_net, device):
     return loss, td_abs_errors
 
 
+def evaluate_agent(env_conf_args: argparse.Namespace, eval_net: nn.Module, device_eval: torch.device,
+                   eval_episodes: int, screen_size_eval: int, terminal_reward_eval: float,
+                   fuel_reward_eval: float) -> float:
+    """
+    Runs the agent for a number of episodes with a greedy policy and returns the mean reward.
+    """
+    eval_env = wrappers.make_env(
+        env_conf_args.env,
+        frameskip=env_conf_args.frameskip,
+        sticky_action_prob=env_conf_args.sticky,
+        random_start_frames=env_conf_args.random_starts,
+        terminal_reward=terminal_reward_eval,
+        fuel_reward=fuel_reward_eval,
+        screen_size=screen_size_eval,
+        use_action_mask=env_conf_args.use_action_mask,
+        render_mode=None  # No rendering needed for evaluation
+    )
+    eval_net.eval()
+    if env_conf_args.noisy:
+        eval_net.reset_noise()
+
+    total_rewards_eval = []
+    for _ in range(eval_episodes):
+        obs, _ = eval_env.reset()
+        episode_reward = 0.0
+        is_done, is_trunc = False, False
+        while not (is_done or is_trunc):
+            obs_v = torch.as_tensor(obs).to(device_eval).unsqueeze(0)
+            q_vals = eval_net(obs_v)
+            action = torch.argmax(q_vals, dim=1).item()
+            obs, reward, is_done, is_trunc, _ = eval_env.step(action)
+            episode_reward += reward
+        total_rewards_eval.append(episode_reward)
+
+    eval_net.train()
+    eval_env.close()
+    return float(np.mean(total_rewards_eval))
+
+
 if __name__ == "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser()
@@ -297,7 +340,7 @@ if __name__ == "__main__":
     frame_idx = 0
     ts_frame = 0
     ts = time.time()
-    best_m_reward = None
+    best_eval_reward = None
 
     # Inner loop of parameter grid
     for frame_idx in range(MAX_FRAMES):
@@ -329,16 +372,32 @@ if __name__ == "__main__":
                 for i, snr in enumerate(snr_values):
                     writer.add_scalar(f"snr/layer_{i}", snr, frame_idx)
                     
-            if best_m_reward is None or best_m_reward < m_reward:
-                torch.save(net.state_dict(), DEFAULT_MODEL_DIR + "/" + args.env.replace("/", "_") + "_" + param_id + "-best_%.0f.dat" % m_reward)
-                if best_m_reward is not None:
-                    print(f"Best reward updated {best_m_reward:.3f} -> {m_reward:.3f}")
-                best_m_reward = m_reward
-            if m_reward > MEAN_REWARD_BOUND:
-                print("Solved in %d frames!" % frame_idx)
-                break
         if len(buffer) < REPLAY_START_SIZE:
             continue
+
+        # Perform evaluation periodically 
+        if frame_idx % EVAL_EVERY_FRAMES == 0 and frame_idx >= REPLAY_START_SIZE: # Ensure we have enough experience
+            eval_reward = evaluate_agent(
+                args, net, device, EVAL_EPISODES,
+                SCREEN_SIZE, TERMINAL_REWARD, FUEL_REWARD
+            )
+            writer.add_scalar("eval_reward", eval_reward, frame_idx)
+            print(f"Frame {frame_idx}: Evaluation avg reward: {eval_reward:.3f}")
+            if best_eval_reward is None or best_eval_reward < eval_reward:
+                save_path = f"{DEFAULT_MODEL_DIR}/{args.env.replace('/', '_')}_{param_id}-best_eval_{eval_reward:.0f}.dat"
+                torch.save(net.state_dict(), save_path)
+                if best_eval_reward is not None:
+                    print(f"Best evaluation reward updated {best_eval_reward:.3f} -> {eval_reward:.3f}, model saved to {save_path}")
+                else:
+                    print(f"Initial best evaluation reward {eval_reward:.3f}, model saved to {save_path}")
+                best_eval_reward = eval_reward
+            
+            # Check if solved based on evaluation reward
+            # This check could also be moved here if desired, to stop training early based on eval
+            if eval_reward > MEAN_REWARD_BOUND:
+                print(f"Solved in {frame_idx} frames with evaluation reward {eval_reward:.3f}!")
+                break # Stop training if solved
+
         if frame_idx % SYNC_TARGET_FRAMES == 0:
             tgt_net.load_state_dict(net.state_dict())
             # Also reset target network noise if using noisy nets
@@ -354,4 +413,5 @@ if __name__ == "__main__":
         # Update priorities
         priorities = np.clip(td_errors + 1e-5, 0, 10)  
         buffer.update_priorities(indices, priorities)
+
     writer.close()
