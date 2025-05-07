@@ -13,7 +13,7 @@ from lib.noisy_dqn_model import NoisyDQN
 import collections
 
 DEFAULT_ENV_NAME = "RiverraidNoFrameskip-v4"
-DEFAULT_MODEL = "models/RiverraidNoFrameskip-v4_NoisyDQN_ScreenSize=84_Sticky=0.2_RandStart=30_FrmSkip=2_RplSize=500000_LR=0.0001-best_-93.dat"
+DEFAULT_MODEL = "models/RiverraidNoFrameskip-v4_NoisyDQN_ScreenSize=84_Sticky=0.2_RandStart=30_FrmSkip=2_RplSize=500000_LR=0.0001-best_-100.dat"
 DEFAULT_RECORD_DIR = "recordings"
 
 # Defaults from dqn_riverraid.py for new arguments

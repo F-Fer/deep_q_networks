@@ -111,8 +111,8 @@ class ActionMaskWrapper(gym.Wrapper):
 
     KEY_ACTION_MAP = [
         0,   # Do nothing
-        1,   # Fire
         3,   # Move right
+        1,   # Fire
         4,   # Move left
         5,   # slow down
     ]
@@ -223,6 +223,7 @@ def make_env(
         terminal_reward: float = -100.0,
         fuel_reward: float = 0.1,
         render_mode: str = None,
+        use_action_mask: bool = True,
         **kwargs
     ):
     """
@@ -254,9 +255,10 @@ def make_env(
     # Reward shaping
     env = NegativeTerminalRewardWrapper(env, terminal_reward=terminal_reward)
     env = FuelRewardWrapper(env, reward=fuel_reward)
-    
-    # Action space and observation formatting
-    env = ActionMaskWrapper(env)
+
+    # Action space formatting
+    if use_action_mask:
+        env = ActionMaskWrapper(env)
     env = ImageToPyTorch(env)
     env = BufferWrapper(env, n_steps=4)
     

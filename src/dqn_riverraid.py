@@ -45,6 +45,9 @@ EPSILON_FINAL = 0.01
 # How often to reset noise in the noisy layers
 NOISE_RESET_FRAMES = 1000
 
+# Action space formatting
+USE_ACTION_MASK = False
+
 State = np.ndarray
 Action = int
 BatchTensors = tt.Tuple[
@@ -228,6 +231,7 @@ if __name__ == "__main__":
                         help=f"Max random no-op actions at episode start (default: {RANDOM_START_FRAMES})")
     parser.add_argument("--frameskip", type=int, default=FRAMESKIP,
                        help=f"Number of frames to skip (default: {FRAMESKIP})")
+    parser.add_argument("--use-action-mask", action="store_true", help="Use action mask")
     
     args = parser.parse_args()
     device = torch.device(args.dev)
@@ -237,7 +241,7 @@ if __name__ == "__main__":
     sticky_prob = args.sticky
     random_starts = args.random_starts
     frameskip = args.frameskip
-    
+    use_action_mask = args.use_action_mask
     # Adjust epsilon parameters if using noisy networks
     epsilon_start = 0.1 if use_noisy else EPSILON_START
     epsilon_final = 0.0 if use_noisy else EPSILON_FINAL
@@ -251,6 +255,8 @@ if __name__ == "__main__":
         env_changes += f"_Sticky={sticky_prob}"
     if random_starts > 0:
         env_changes += f"_RandStart={random_starts}"
+    if use_action_mask:
+        env_changes += f"_UseActionMask"
     
     param_id = f"FrmSkip={frameskip}_RplSize={REPLAY_SIZE}_LR={LEARNING_RATE}"
     param_id = env_changes + "_" + param_id
@@ -263,7 +269,8 @@ if __name__ == "__main__":
         random_start_frames=random_starts,
         terminal_reward=TERMINAL_REWARD,
         fuel_reward=FUEL_REWARD,
-        screen_size=SCREEN_SIZE
+        screen_size=SCREEN_SIZE,
+        use_action_mask=use_action_mask
     )
     
     # Initialize network based on use_noisy
