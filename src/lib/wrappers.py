@@ -160,12 +160,102 @@ class CuriosityWrapper(gym.Wrapper):
         return hash(binary.tobytes())  # Create hash
     
 
-def make_env(env_name: str, **kwargs):
+class StickyActionsWrapper(gym.Wrapper):
+    """
+    Implements sticky actions from the paper "Revisiting the Arcade Learning Environment:
+    Evaluation Protocols and Open Problems for General Agents" by Machado et al.
+    
+    At each step, with probability p, the environment will ignore the agent's action
+    and repeat the previous action instead.
+    """
+    def __init__(self, env, p=0.25):
+        super().__init__(env)
+        self.p = p
+        self.last_action = 0
+        
+    def reset(self, **kwargs):
+        self.last_action = 0  # Reset to NOOP
+        return self.env.reset(**kwargs)
+    
+    def step(self, action):
+        # With probability p, repeat the last action instead
+        if np.random.random() < self.p:
+            action = self.last_action
+        self.last_action = action
+        return self.env.step(action)
+    
+
+class RandomStartWrapper(gym.Wrapper):
+    """
+    Start episodes with one shoot action followed by a random number of no-ops.
+    This adds stochasticity to the initial state of the environment.
+    """
+    def __init__(self, env, max_random_frames=30):
+        super().__init__(env)
+        self.max_random_frames = max_random_frames
+        self.noop_action = 0  # NOOP action
+        self.shoot_action = 2  # SHOOT action
+        
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        
+        # Apply random number of no-op actions at the start
+        if self.max_random_frames > 0:
+            # First step is a shoot action
+            obs, _, done, truncated, info = self.env.step(self.shoot_action)
+            # Then random number of no-op actions
+            num_random_frames = np.random.randint(0, self.max_random_frames)
+            for _ in range(num_random_frames):
+                obs, _, done, truncated, info = self.env.step(self.noop_action)
+                if done or truncated:
+                    obs, info = self.env.reset(**kwargs)
+                    
+        return obs, info
+
+
+
+def make_env(
+        env_name: str, 
+        frameskip: int = 4, 
+        sticky_action_prob: float = 0.0, 
+        random_start_frames: int = 0, 
+        screen_size: int = 84, 
+        terminal_reward: float = -100.0,
+        fuel_reward: float = 0.1,
+        **kwargs
+    ):
+    """
+    Create environment with wrappers for non-determinism and preprocessing.
+    
+    Args:
+        env_name: Name of the Atari environment
+        frameskip: Number of frames to skip between actions
+        sticky_action_prob: Probability of repeating the previous action (stickiness)
+        random_start_frames: Maximum number of no-op actions at the start of an episode
+        screen_size: Size of the screen to downsample to
+    """
     env = gym.make(env_name, **kwargs)
-    env = atari_wrappers.AtariWrapper(env, clip_reward=True, noop_max=30, screen_size=84)
-    env = NegativeTerminalRewardWrapper(env, terminal_reward=-100.0)
-    env = FuelRewardWrapper(env, reward=1.0)
+    
+    # Standard Atari preprocessing
+    env = atari_wrappers.AtariWrapper(
+        env, 
+        clip_reward=True, 
+        noop_max=0,
+        screen_size=screen_size,
+        frame_skip=frameskip,
+        action_repeat_probability=sticky_action_prob
+    )
+    
+    # Add non-determinism
+    env = RandomStartWrapper(env, max_random_frames=random_start_frames)
+    
+    # Reward shaping
+    env = NegativeTerminalRewardWrapper(env, terminal_reward=terminal_reward)
+    env = FuelRewardWrapper(env, reward=fuel_reward)
+    
+    # Action space and observation formatting
     env = ActionMaskWrapper(env)
     env = ImageToPyTorch(env)
     env = BufferWrapper(env, n_steps=4)
+    
     return env

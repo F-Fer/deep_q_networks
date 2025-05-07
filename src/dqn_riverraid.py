@@ -25,11 +25,18 @@ MAX_FRAMES = 3_000_000
 
 GAMMA = 0.99
 BATCH_SIZE = 32
-REPLAY_SIZE = 250_000
-LEARNING_RATE = 0.00025 #1e-4
+REPLAY_SIZE = 500_000
+LEARNING_RATE = 1e-4
 SYNC_TARGET_FRAMES = 10_000
 REPLAY_START_SIZE = 50_000
 FRAMESKIP = 2
+SCREEN_SIZE = 84
+TERMINAL_REWARD = -100.0
+FUEL_REWARD = 0.1
+
+# Default nondeterminism parameters
+STICKY_ACTION_PROB = 0.0
+RANDOM_START_FRAMES = 30
 
 # Parameters for the epsilon-greedy exploration
 EPSILON_DECAY_LAST_FRAME = 250_000
@@ -213,11 +220,23 @@ if __name__ == "__main__":
     parser.add_argument("--env", default=DEFAULT_ENV_NAME,
                         help="Name of the environment, default=" + DEFAULT_ENV_NAME)
     parser.add_argument("--noisy", action="store_true", help="Use NoisyDQN instead of standard DQN")
+    
+    # Add nondeterminism configuration options
+    parser.add_argument("--sticky", type=float, default=STICKY_ACTION_PROB, 
+                        help=f"Probability of sticky actions (default: {STICKY_ACTION_PROB})")
+    parser.add_argument("--random-starts", type=int, default=RANDOM_START_FRAMES, 
+                        help=f"Max random no-op actions at episode start (default: {RANDOM_START_FRAMES})")
+    parser.add_argument("--frameskip", type=int, default=FRAMESKIP,
+                       help=f"Number of frames to skip (default: {FRAMESKIP})")
+    
     args = parser.parse_args()
     device = torch.device(args.dev)
     
-    # Get use_noisy flag from args
+    # Get configuration parameters
     use_noisy = args.noisy
+    sticky_prob = args.sticky
+    random_starts = args.random_starts
+    frameskip = args.frameskip
     
     # Adjust epsilon parameters if using noisy networks
     epsilon_start = 0.1 if use_noisy else EPSILON_START
@@ -225,14 +244,27 @@ if __name__ == "__main__":
 
     # Define unique identifier for this parameter combination
     model_type = "NoisyDQN" if use_noisy else "DQN"
-    env_changes = f"{model_type}_ClipRwd_PrioReplay_WithFrmSkip_NoRptAction_FuelReward_NegTrmlRwd=-100_NoopMax=30_ActionMask"
-    param_id = f"FrmSkip={FRAMESKIP}_RplSize={REPLAY_SIZE}_LR={LEARNING_RATE}_EpsFinal={epsilon_final}_EpsDecayLastFrame={EPSILON_DECAY_LAST_FRAME}_RedStartSize={REPLAY_START_SIZE}_Gamma={GAMMA}_BatchSize={BATCH_SIZE}"
+    env_changes = f"{model_type}_ScreenSize={SCREEN_SIZE}"
+    
+    # Add nondeterminism info to environment changes
+    if sticky_prob > 0:
+        env_changes += f"_Sticky={sticky_prob}"
+    if random_starts > 0:
+        env_changes += f"_RandStart={random_starts}"
+    
+    param_id = f"FrmSkip={frameskip}_RplSize={REPLAY_SIZE}_LR={LEARNING_RATE}"
     param_id = env_changes + "_" + param_id
-    print(f"Running {env_changes} with {param_id}")
-    print(f"Length of param_id: {len(param_id)}")
 
-    # Initialize environment
-    env = wrappers.make_env(args.env, frameskip=FRAMESKIP)
+    # Initialize environment with nondeterminism parameters
+    env = wrappers.make_env(
+        args.env, 
+        frameskip=frameskip,
+        sticky_action_prob=sticky_prob,
+        random_start_frames=random_starts,
+        terminal_reward=TERMINAL_REWARD,
+        fuel_reward=FUEL_REWARD,
+        screen_size=SCREEN_SIZE
+    )
     
     # Initialize network based on use_noisy
     if use_noisy:
