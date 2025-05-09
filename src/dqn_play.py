@@ -10,12 +10,12 @@ import re
 import torch
 
 from lib import wrappers
-from lib.noisy_dqn_model import NoisyDQN
+from lib.noisy_dqn_model import NoisyDQN, LargeNoisyDQN
 
 import collections
 
 DEFAULT_ENV_NAME = "RiverraidNoFrameskip-v4"
-DEFAULT_MODEL = "models/RiverraidNoFrameskip-v4_NoisyDQN_ScreenSize=84_Sticky=0.25_RandStart=20_UseActionMask_FrmSkip=2_RplSize=500000_LR=0.0001-best_eval_-88.dat"
+DEFAULT_MODEL = "models/RiverraidNoFrameskip-v4_LargeNoisyDQN_ScreenSize=84_Sticky=0.1_RandStart=20_FrmSkip=2_RplSize=450000_LR=0.0001-best_eval_-86.dat"
 DEFAULT_RECORD_DIR = "recordings"
 
 # Ultimate fallback defaults (aligned with dqn_riverraid.py defaults)
@@ -24,10 +24,12 @@ SCRIPT_DEFAULT_STICKY_ACTION_PROB = 0.0
 SCRIPT_DEFAULT_RANDOM_START_FRAMES = 30 # dqn_riverraid.py uses 30
 SCRIPT_DEFAULT_USE_ACTION_MASK = False
 SCRIPT_DEFAULT_FRAME_SIZE = 84
+USE_LARGE_MODEL = False
 
 def parse_model_filename_for_defaults(model_path: str) -> dict:
     """Parses known hyperparameters from the model filename."""
     defaults = {
+        "use_large_model": USE_LARGE_MODEL,
         "frameskip": SCRIPT_DEFAULT_FRAMESKIP,
         "sticky": SCRIPT_DEFAULT_STICKY_ACTION_PROB,
         "random_starts": SCRIPT_DEFAULT_RANDOM_START_FRAMES,
@@ -53,6 +55,9 @@ def parse_model_filename_for_defaults(model_path: str) -> dict:
 
     if re.search(r"_UseActionMask", model_filename):
         defaults["use_action_mask"] = True
+
+    if re.search(r"_LargeNoisyDQN", model_filename):
+        defaults["use_large_model"] = True
 
     screen_size_match = re.search(r"_ScreenSize=(\d+)", model_filename)
     if screen_size_match:
@@ -90,6 +95,9 @@ if __name__ == "__main__":
                         help="Use reduced action space (default: from model filename, fallback False)")
     parser.add_argument("--screen-size", type=int, default=parsed_defaults["screen_size"],
                         help=f"Screen size (default: from model filename, fallback {SCRIPT_DEFAULT_FRAME_SIZE})")
+    parser.add_argument("--use-large-model", default=parsed_defaults["use_large_model"], 
+                        action=argparse.BooleanOptionalAction,
+                        help="Use large model")
     
     args = parser.parse_args()
 
@@ -98,7 +106,8 @@ if __name__ == "__main__":
     print(f"  Frameskip: {args.frameskip}")
     print(f"  Sticky Action Probability: {args.sticky}")
     print(f"  Random Start Frames: {args.random_starts}")
-    print(f"  Use Action Mask: {args.use_action_mask}\n")
+    print(f"  Use Action Mask: {args.use_action_mask}")
+    print(f"  Use Large Model: {args.use_large_model}\n")
 
     record_dir = args.record + "/" + os.path.basename(args.model).split(".")[0]
     if not os.path.exists(record_dir):
@@ -116,7 +125,11 @@ if __name__ == "__main__":
         use_action_mask=args.use_action_mask,
     )
     env = gym.wrappers.RecordVideo(env, video_folder=record_dir)
-    net = NoisyDQN(env.observation_space.shape, env.action_space.n)
+
+    if args.use_large_model:
+        net = LargeNoisyDQN(env.observation_space.shape, env.action_space.n)
+    else:
+        net = NoisyDQN(env.observation_space.shape, env.action_space.n)
     
     try:
         state_dict = torch.load(args.model, map_location=lambda stg, _: stg, weights_only=True)

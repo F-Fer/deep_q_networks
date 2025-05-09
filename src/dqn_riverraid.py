@@ -1,7 +1,7 @@
 import gymnasium as gym
 from lib import dqn_model
 from lib import wrappers
-from lib.noisy_dqn_model import NoisyDQN
+from lib.noisy_dqn_model import NoisyDQN, LargeNoisyDQN
 import typing as tt
 
 from dataclasses import dataclass
@@ -29,7 +29,7 @@ EVAL_EPISODES = 10
 
 GAMMA = 0.99
 BATCH_SIZE = 32
-REPLAY_SIZE = 500_000
+REPLAY_SIZE = 450_000
 LEARNING_RATE = 1e-4
 SYNC_TARGET_FRAMES = 10_000
 REPLAY_START_SIZE = 50_000
@@ -235,7 +235,7 @@ def evaluate_agent(env_conf_args: argparse.Namespace, eval_net: nn.Module, devic
         fuel_reward=fuel_reward_eval,
         screen_size=screen_size_eval,
         use_action_mask=env_conf_args.use_action_mask,
-        render_mode=None  # No rendering needed for evaluation
+        render_mode=None,  # No rendering needed for evaluation
     )
     eval_net.eval()
     if env_conf_args.noisy:
@@ -266,6 +266,8 @@ if __name__ == "__main__":
     parser.add_argument("--env", default=DEFAULT_ENV_NAME,
                         help="Name of the environment, default=" + DEFAULT_ENV_NAME)
     parser.add_argument("--noisy", action="store_true", help="Use NoisyDQN instead of standard DQN")
+    parser.add_argument("--model-size", type=str, default="standard", choices=["standard", "large"],
+                        help="Size of the DQN model to use (standard or large, default: standard)")
     
     # Add nondeterminism configuration options
     parser.add_argument("--sticky", type=float, default=STICKY_ACTION_PROB, 
@@ -275,7 +277,9 @@ if __name__ == "__main__":
     parser.add_argument("--frameskip", type=int, default=FRAMESKIP,
                        help=f"Number of frames to skip (default: {FRAMESKIP})")
     parser.add_argument("--use-action-mask", action="store_true", help="Use action mask")
-    
+    parser.add_argument("--screen-size", type=int, default=SCREEN_SIZE,
+                        help=f"Screen size (default: {SCREEN_SIZE})")
+
     args = parser.parse_args()
     device = torch.device(args.dev)
     
@@ -285,13 +289,20 @@ if __name__ == "__main__":
     random_starts = args.random_starts
     frameskip = args.frameskip
     use_action_mask = args.use_action_mask
+    model_size_arg = args.model_size
+    screen_size = args.screen_size
+
     # Adjust epsilon parameters if using noisy networks
     epsilon_start = 0.1 if use_noisy else EPSILON_START
     epsilon_final = 0.0 if use_noisy else EPSILON_FINAL
 
     # Define unique identifier for this parameter combination
     model_type = "NoisyDQN" if use_noisy else "DQN"
-    env_changes = f"{model_type}_ScreenSize={SCREEN_SIZE}"
+    env_changes = f"{model_type}_ScreenSize={screen_size}"
+    if model_size_arg == "large" and use_noisy:
+        env_changes = f"Large{env_changes}"
+    elif model_size_arg == "large" and not use_noisy:
+        env_changes = f"Large{model_type}_ScreenSize={screen_size}"
     
     # Add nondeterminism info to environment changes
     if sticky_prob > 0:
@@ -312,17 +323,26 @@ if __name__ == "__main__":
         random_start_frames=random_starts,
         terminal_reward=TERMINAL_REWARD,
         fuel_reward=FUEL_REWARD,
-        screen_size=SCREEN_SIZE,
+        screen_size=screen_size,
         use_action_mask=use_action_mask
     )
     
-    # Initialize network based on use_noisy
+    # Initialize network based on use_noisy and model_size_arg
     if use_noisy:
-        net = NoisyDQN(env.observation_space.shape, env.action_space.n).to(device)
-        tgt_net = NoisyDQN(env.observation_space.shape, env.action_space.n).to(device)
+        if model_size_arg == "large":
+            net = LargeNoisyDQN(env.observation_space.shape, env.action_space.n).to(device)
+            tgt_net = LargeNoisyDQN(env.observation_space.shape, env.action_space.n).to(device)
+            print("Using Large NoisyDQN model.")
+        else:
+            net = NoisyDQN(env.observation_space.shape, env.action_space.n).to(device)
+            tgt_net = NoisyDQN(env.observation_space.shape, env.action_space.n).to(device)
+            print("Using Standard NoisyDQN model.")
     else:
+        if model_size_arg == "large":
+            print("Warning: --model-size large selected with standard DQN, but LargeDQN (non-noisy) is not implemented. Using standard DQN size.")
         net = dqn_model.DQN(env.observation_space.shape, env.action_space.n).to(device)
         tgt_net = dqn_model.DQN(env.observation_space.shape, env.action_space.n).to(device)
+        print("Using Standard DQN model.")
     
     writer = SummaryWriter(comment="-" + param_id)
     print(net)
@@ -379,7 +399,7 @@ if __name__ == "__main__":
         if frame_idx % EVAL_EVERY_FRAMES == 0 and frame_idx >= REPLAY_START_SIZE: # Ensure we have enough experience
             eval_reward = evaluate_agent(
                 args, net, device, EVAL_EPISODES,
-                SCREEN_SIZE, TERMINAL_REWARD, FUEL_REWARD
+                screen_size, TERMINAL_REWARD, FUEL_REWARD
             )
             writer.add_scalar("eval_reward", eval_reward, frame_idx)
             print(f"Frame {frame_idx}: Evaluation avg reward: {eval_reward:.3f}")
